@@ -41,6 +41,16 @@ typedef union _DESCRIPTOR {
         uint8 g:1;
         uint8 base_high;
     } desc;
+    struct {
+        uint16 offset_low;
+        uint16 segmSelector;
+        uint8  reserv1:5;
+        uint8  reserv2:3;
+        uint8  type:5;
+        uint8  dpl:2;
+        uint8  p:1;
+        uint16 offset_hight;
+    } int_gate;
 } DESCRIPTOR, *PDESCRIPTOR;
 
 typedef union _PTE {
@@ -215,6 +225,18 @@ const char* get_str_stype_by_code(uint8 type)
     }
 }
 
+const char* get_str_type_idt(uint8 type)
+{
+    switch(type & 0x7)
+    {
+        case 5: return "Task Gate";
+        case 6: return "Interrupt Gate";
+        case 7: return "Trap Gate";
+
+        default: return "Not matching";
+    }
+}
+
 void fprint_descripor(FILE* f, PDESCRIPTOR d)
 {
     fprintf(f, "\tVALUE=0x%08X-%08X PRESENT=%s \n", d->raw.high, d->raw.low, d->desc.p ? "yes":"no");
@@ -231,16 +253,37 @@ void fprint_descripor(FILE* f, PDESCRIPTOR d)
     }
 }
 
-void fprint_desctable(FILE* f, uint32* base, uint32 limit)
+#define OFFSET_FROM_INTERRUPT(x) ((x->int_gate.offset_low) | (x->int_gate.offset_hight << 16))
+
+void fprint_idt_table(FILE* f, PDESCRIPTOR d)
 {
+    fprintf(f, "\tVALUE=0x%08X-%08X PRESENT=%s\n", d->raw.high, d->raw.low, d->desc.p ? "yes":"no");
+
+    if(d->int_gate.p){
+        fprintf(f, "\tOFFSET=0x%08X  DPL=0x%X TYPE=0x%s RESERV=0x%X SEGM_SEL=0x%X\n", 
+            OFFSET_FROM_INTERRUPT(d), d->int_gate.dpl, get_str_type_idt(d->int_gate.type), d->int_gate.reserv1, d->int_gate.segmSelector);
+    }
+}
+
+enum TABLE_TYPE{TABLE_ANY=0, TABLE_IDT};
+
+void fprint_desctable(FILE* f, uint32* base, uint32 limit, uint8 type)
+{
+    DESCRIPTOR d;
+
     int i;
     for(i=0;;i++) { //i is an index in the array of 64bit descriptors
-        DESCRIPTOR d;
-        if (i*8 > limit) break;
         fprintf(f, "element %d (selector = %04X): \n", i, i<<3);
+        if (i*8 > limit) break;
+
         d.raw.low = base[i*2];
         d.raw.high = base[i*2+1];
-        fprint_descripor(f, &d);
+
+        if (type == TABLE_ANY){
+            fprint_descripor(f, &d);
+        } else {
+            fprint_idt_table(f, &d);
+        }
     }
 }
 
@@ -256,7 +299,7 @@ void fprint_tables(PSYSINFO sysinfo)
     if (0 == gdt_dump) {
         printf("ERROR: cannot fopen gdt_dump \n");
     } else {
-        fprint_desctable(gdt_dump, (uint32*)sysinfo->gdt.base, sysinfo->gdt.limit);
+        fprint_desctable(gdt_dump, (uint32*)sysinfo->gdt.base, sysinfo->gdt.limit, TABLE_ANY);
     }
 
     //print IDT
@@ -264,7 +307,7 @@ void fprint_tables(PSYSINFO sysinfo)
     if (0 == idt_dump) {
         printf("ERROR: cannot fopen gdt_dump \n");
     } else {
-        fprint_desctable(idt_dump, (uint32*)sysinfo->idt.base, sysinfo->idt.limit);
+        fprint_desctable(idt_dump, (uint32*)sysinfo->idt.base, sysinfo->idt.limit, TABLE_IDT);
     }
 
     //print LDT
@@ -272,7 +315,7 @@ void fprint_tables(PSYSINFO sysinfo)
     if(0 == ldt_dump) {
         printf("ERROR: cannot fopen ldt_dump");
     } else {
-        fprint_desctable(ldt_dump, (uint32*)sysinfo->ldt.base, sysinfo->ldt.limit);    
+        fprint_desctable(ldt_dump, (uint32*)sysinfo->ldt.base, sysinfo->ldt.limit, TABLE_ANY);    
     }
 
     //print TSS
@@ -280,7 +323,7 @@ void fprint_tables(PSYSINFO sysinfo)
     if(0 == tss_dump) {
         printf("ERROR: cannot fopen ldt_dump");
     } else {
-        fprint_desctable(tss_dump, (uint32*)sysinfo->tss.base, sysinfo->tss.limit);    
+        fprint_desctable(tss_dump, (uint32*)sysinfo->tss.base, sysinfo->tss.limit, TABLE_ANY);    
     }
 
     fclose(gdt_dump);
